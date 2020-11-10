@@ -5,6 +5,7 @@
  *  USB Joystick code (Teensy only supports 1 joystick without hacking)
  *  Support detection of the multitap - DONE
  *  Support detection of the mouse
+ *  Round robin mode? Every X seconds who's controlling player 1 changes
 
    7 pin SNES proprietary female connector view:
     -----------------\
@@ -52,9 +53,11 @@ const int PIN_SELECT = 4;
   };
 */
 
+uint32_t mouse;
 uint16_t state[4]; //What data we read out of the SNES pad.
 bool  disconnected[4]; //Whether there's a controller connected to that port on the multitap
-
+uint16_t state_old[4];
+bool disconnected_old[4];
 
 enum device_type_t {DISCONNECTED, MULTITAP, GAMEPAD, MOUSE};
 device_type_t device_type = DISCONNECTED;
@@ -63,6 +66,8 @@ void setup()
 {
   Serial.begin (115200);
   Serial.println ("SNES2USB - Bomberman edition");
+  Joystick.useManualSend(true);
+  
   for (int i = 0; i < MAX_PADS; i++)
   {
     disconnected[i] = true;
@@ -110,7 +115,131 @@ void joystick_remove (int i)
   disconnected[i] = true;
 }
 
-void read_pair (int offset)
+void set_latch ()
+{
+  digitalWrite(PIN_LATCH, HIGH);
+  digitalWrite (PIN_SELECT, HIGH);
+  delayMicroseconds(12);
+  digitalWrite(PIN_LATCH, LOW);
+  delayMicroseconds(6);
+}
+
+bool detect_multitap ()
+{
+  uint8_t result = 0;
+
+  digitalWrite(PIN_LATCH, HIGH);
+  delayMicroseconds(6);
+  digitalWrite(PIN_CLOCK, LOW);
+  delayMicroseconds(6);
+  result = digitalRead(PIN_DATA2);
+  digitalWrite(PIN_CLOCK, HIGH);
+  delayMicroseconds(6);
+  digitalWrite(PIN_LATCH, LOW);
+  if (result != 0)
+    return false;
+  else
+  {
+    if (device_type != MULTITAP)
+      Serial.println ("Multitap found!");
+    device_type = MULTITAP;
+    return true;
+  }
+}
+
+bool detect_mouse ()
+{
+  mouse = 0;
+  set_latch ();
+
+  for (int i = 0; i < 32; i++)
+  {
+    digitalWrite(PIN_CLOCK, LOW);
+    delayMicroseconds(6);
+    mouse |= digitalRead(PIN_DATA) << i;
+    digitalWrite(PIN_CLOCK, HIGH);
+    delayMicroseconds(6);
+  }
+  //Serial.println (mouse, BIN);
+  if ((mouse & (1 << 15)) == 0)//16th bit should be zero
+  {
+    if (device_type != MOUSE)
+      Serial.println ("Mouse detected!");
+    device_type = MOUSE;
+    return true;
+  }
+  return false;
+}
+
+bool detect_gamepad ()
+{
+  uint16_t data = 0;
+  set_latch ();
+
+  for (int i = 0; i < 16; i++)
+  {
+    digitalWrite(PIN_CLOCK, LOW);
+    delayMicroseconds(6);
+    data |= digitalRead(PIN_DATA) << i;
+    digitalWrite(PIN_CLOCK, HIGH);
+    delayMicroseconds(6);
+  }
+  Serial.println (data, BIN);
+  if ((data & (15 << 12)) != 0)//bits 14-16 should be set
+  {
+    if (device_type != GAMEPAD)
+      Serial.println ("Gamepad detected!");
+    device_type = GAMEPAD;
+    return true;
+  }
+  return false;
+}
+
+void detect_devices ()
+{
+  bool result = false;
+  result |= detect_mouse ();
+  result |= detect_multitap ();
+  //result |= detect_gamepad (); //Need to put some tiedown resistors on, it always floats on the gamepad bits.
+  if (!result)
+    device_type = DISCONNECTED;  
+}
+
+void multitap_check_devices ()
+{
+  for (int i=0;i<MAX_PADS;i++)
+  {
+    if (disconnected_old[i] != disconnected[i])
+    {
+      if (disconnected[i])
+        joystick_remove(i);
+      else
+        joystick_add(i);
+        
+      disconnected_old[i] = disconnected[i];
+    }
+       
+    if (state_old[i] != state[i])
+    {
+      state_old[i] = state[i];
+      Serial.print ("J" + String(i) + ": ");
+      Serial.println (state[i], BIN);
+    }
+  }
+}
+
+void multitap_state_backup ()
+{
+  //Backup the current state so we can see if anything changes later;
+  for (int i=0;i<MAX_PADS;i++)
+  {
+    state_old[i] = state[i];
+    disconnected_old[i] = disconnected[i];
+  }
+
+}
+
+void multitap_read_pair (int offset)
 {
   state[offset] = 0;
   state[offset + 1] = 0;
@@ -132,46 +261,59 @@ void read_pair (int offset)
   digitalWrite(PIN_CLOCK, HIGH);
 }
 
-bool detect_multitap ()
+void multitap_read ()
 {
-  uint8_t result = 0;
+  set_latch();
+  multitap_read_pair (0);
+  digitalWrite (PIN_SELECT, LOW);
+  delayMicroseconds(12);
+  multitap_read_pair (2);
+  digitalWrite (PIN_SELECT, HIGH);
+}
 
-  digitalWrite(PIN_LATCH, HIGH);
-  delayMicroseconds(6);
-  digitalWrite(PIN_CLOCK, LOW);
-  delayMicroseconds(6);
-  result = digitalRead(PIN_DATA2);
-  digitalWrite(PIN_CLOCK, HIGH);
-  delayMicroseconds(6);
-  digitalWrite(PIN_LATCH, LOW);
-  if (result != 0)
-    return false;
-  else
+void mouse_read ()
+{
+  mouse = 0;
+  set_latch ();
+
+  for (int i = 0; i < 32; i++)
   {
-    device_type = MULTITAP;
-    return true;
+    digitalWrite(PIN_CLOCK, LOW);
+    delayMicroseconds(6);
+    mouse |= digitalRead(PIN_DATA) << i;
+    digitalWrite(PIN_CLOCK, HIGH);
+    delayMicroseconds(6);
   }
 }
 
-void read_snespads ()
+void gamepad_read ()
 {
-  digitalWrite(PIN_LATCH, HIGH);
-  digitalWrite (PIN_SELECT, HIGH);
-  delayMicroseconds(12);
+  state[0] = 0;
+    mouse = 0;
+  set_latch ();
 
-  digitalWrite(PIN_LATCH, LOW);
-  delayMicroseconds(6);
-
-  read_pair (0);
-  digitalWrite (PIN_SELECT, LOW);
-  delayMicroseconds(12);
-  read_pair (2);
-  digitalWrite (PIN_SELECT, HIGH);
-
+  for (int i = 0; i < 32; i++)
+  {
+    digitalWrite(PIN_CLOCK, LOW);
+    delayMicroseconds(6);
+    state[0] |= digitalRead(PIN_DATA) << i;
+    digitalWrite(PIN_CLOCK, HIGH);
+    delayMicroseconds(6);
+  }
 }
+
 
 void set_buttons (int p)
 {
+
+  Joystick.button (1, SNES_B & ~state[p]);
+  Joystick.button (2, SNES_Y & ~state[p]);
+  Joystick.button (3, SNES_SELECT & ~state[p]);
+  Joystick.button (4, SNES_START & ~state[p]);
+  Joystick.button (5, SNES_A & ~state[p]);
+  Joystick.button (6, SNES_X & ~state[p]);
+  Joystick.button (7, SNES_L & ~state[p]);
+  Joystick.button (8, SNES_R & ~state[p]);  
   /*
     // buttons
     SNES_B & ~state[p] ? Joystick[p].pressButton(0) : Joystick[p].releaseButton(0);
@@ -187,6 +329,14 @@ void set_buttons (int p)
 
 void set_axis (int p)
 {
+  Joystick.X (512);
+  Joystick.Y (512);
+  
+  if (SNES_UP & ~state[p]) Joystick.Y(0);
+  if (SNES_RIGHT & ~state[p]) Joystick.X(1034);
+  if (SNES_DOWN & ~state[p]) Joystick.Y(1034);
+  if (SNES_LEFT & ~state[p]) Joystick.X(0);
+  
   /*
     Joystick[p].setXAxis(0);
     Joystick[p].setYAxis(0);
@@ -197,48 +347,33 @@ void set_axis (int p)
   */
 }
 
+
+
 void loop() 
 {
-  uint16_t state_old[4];
-  bool disconnected_old[4];
-  
-  if (!detect_multitap ())
+  detect_devices ();
+  switch (device_type)
   {
-    Serial.println ("Multitap not connected");
-    delay(2000);
-    return;
+      case MULTITAP:
+        multitap_state_backup ();
+        multitap_read ();
+        multitap_check_devices ();
+        break;
+      case MOUSE:
+        mouse_read ();
+        break;
+      case GAMEPAD:
+        gamepad_read ();
+        break;
+      case DISCONNECTED:
+      default:
+        Serial.println ("Couldn't find any devices");
+        delay (2000);
+        return;
   }
-
-  //Backup the current state so we can see if anything changes later;
-  for (int i=0;i<MAX_PADS;i++)
-  {
-    state_old[i] = state[i];
-    disconnected_old[i] = disconnected[i];
-  }
-  
-  read_snespads();
-
-  for (int i=0;i<MAX_PADS;i++)
-  {
-    if (disconnected_old[i] != disconnected[i])
-    {
-      if (disconnected[i])
-        joystick_remove(i);
-      else
-        joystick_add(i);
-        
-      disconnected_old[i] = disconnected[i];
-    }
-    
-    
-    if (state_old[i] != state[i])
-    {
-      state_old[i] = state[i];
-      Serial.print ("J" + String(i) + ": ");
-      Serial.println (state[i], BIN);
-    }
-  }
-  
+  set_buttons (0);
+  set_axis (0);
+  Joystick.send_now();
   /*
   for (int i = 0; i < MAX_PADS; i++)
   {
