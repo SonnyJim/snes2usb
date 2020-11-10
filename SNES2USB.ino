@@ -3,7 +3,8 @@
  *  
  *  TODO:  
  *  USB Joystick code (Teensy only supports 1 joystick without hacking)
- *  Support detection of the multitap (output 1 to 4016, read 4017 8 times (should be 1's), output 0 to 4016 read register 8 times (should be 0).
+ *  Support detection of the multitap - DONE
+ *  Support detection of the mouse
 
    7 pin SNES proprietary female connector view:
     -----------------\
@@ -11,8 +12,8 @@
     -----------------/
    pin 1: +5v
    pin 2: Data Clock
-   pin 3: Data Latch
-   pin 4: Controlers 1/2 (D0)
+   pin 3: Data Latch (4016)
+   pin 4: Controlers 1/2  (D0)
    pin 5: Controllers 3/4 (D1)
    pin 6: Select (PP7)
 */
@@ -50,9 +51,13 @@ const int PIN_SELECT = 4;
   Joystick_(JOYSTICK_DEFAULT_REPORT_ID + 3, JOYSTICK_TYPE_GAMEPAD, 8, 0, true, true, false, false, false, false, false, false, false, false, false),
   };
 */
-uint16_t state[4]; //What data we read out of the SNES pad.
-bool  present[4];
 
+uint16_t state[4]; //What data we read out of the SNES pad.
+bool  disconnected[4]; //Whether there's a controller connected to that port on the multitap
+
+
+enum device_type_t {DISCONNECTED, MULTITAP, GAMEPAD, MOUSE};
+device_type_t device_type = DISCONNECTED;
 
 void setup()
 {
@@ -60,7 +65,10 @@ void setup()
   Serial.println ("SNES2USB - Bomberman edition");
   for (int i = 0; i < MAX_PADS; i++)
   {
-    present[i] = false;/*
+    disconnected[i] = true;
+    state[i] = 0xFFFF; //Because too lazy to flip the bits
+    /*
+    
     Joystick[i].begin ();
     Joystick[i].setXAxisRange(-1, 1);
     Joystick[i].setYAxisRange(-1, 1);
@@ -81,7 +89,7 @@ void setup()
 
 }
 
-void joystick_create (int i)
+void joystick_add (int i)
 {
   if (i > MAX_PADS || i < 0)
     return;
@@ -99,8 +107,7 @@ void joystick_remove (int i)
   Serial.println ("Joystick " + String(i) + " disconnected :(");
   //  Joystick[i].end();
   state[i] = 0;
-  present[i] = false;
-
+  disconnected[i] = true;
 }
 
 void read_pair (int offset)
@@ -120,19 +127,34 @@ void read_pair (int offset)
   
   digitalWrite(PIN_CLOCK, LOW);
   delayMicroseconds(6);
-  present[offset] = digitalRead(PIN_DATA);
-  present[offset + 1] = digitalRead(PIN_DATA2);
+  disconnected[offset] = digitalRead(PIN_DATA);
+  disconnected[offset + 1] = digitalRead(PIN_DATA2);
+  digitalWrite(PIN_CLOCK, HIGH);
+}
+
+bool detect_multitap ()
+{
+  uint8_t result = 0;
+
+  digitalWrite(PIN_LATCH, HIGH);
+  delayMicroseconds(6);
+  digitalWrite(PIN_CLOCK, LOW);
+  delayMicroseconds(6);
+  result = digitalRead(PIN_DATA2);
   digitalWrite(PIN_CLOCK, HIGH);
   delayMicroseconds(6);
-
-  Serial.println (state[offset], BIN);
-  Serial.println (state[offset + 1], BIN);
-  Serial.println (String(present[offset]) + ":" + String(present[offset+1]));
+  digitalWrite(PIN_LATCH, LOW);
+  if (result != 0)
+    return false;
+  else
+  {
+    device_type = MULTITAP;
+    return true;
+  }
 }
 
 void read_snespads ()
 {
-  // 12us latch
   digitalWrite(PIN_LATCH, HIGH);
   digitalWrite (PIN_SELECT, HIGH);
   delayMicroseconds(12);
@@ -143,7 +165,7 @@ void read_snespads ()
   read_pair (0);
   digitalWrite (PIN_SELECT, LOW);
   delayMicroseconds(12);
-  read_pair (1);
+  read_pair (2);
   digitalWrite (PIN_SELECT, HIGH);
 
 }
@@ -175,14 +197,55 @@ void set_axis (int p)
   */
 }
 
-void loop() {
+void loop() 
+{
+  uint16_t state_old[4];
+  bool disconnected_old[4];
+  
+  if (!detect_multitap ())
+  {
+    Serial.println ("Multitap not connected");
+    delay(2000);
+    return;
+  }
 
+  //Backup the current state so we can see if anything changes later;
+  for (int i=0;i<MAX_PADS;i++)
+  {
+    state_old[i] = state[i];
+    disconnected_old[i] = disconnected[i];
+  }
+  
   read_snespads();
-  for (int i = 0; i < 3; i++)
+
+  for (int i=0;i<MAX_PADS;i++)
+  {
+    if (disconnected_old[i] != disconnected[i])
+    {
+      if (disconnected[i])
+        joystick_remove(i);
+      else
+        joystick_add(i);
+        
+      disconnected_old[i] = disconnected[i];
+    }
+    
+    
+    if (state_old[i] != state[i])
+    {
+      state_old[i] = state[i];
+      Serial.print ("J" + String(i) + ": ");
+      Serial.println (state[i], BIN);
+    }
+  }
+  
+  /*
+  for (int i = 0; i < MAX_PADS; i++)
   {
     set_buttons(i);
     set_axis (i);
-    //Joystick[i].sendState();
+    Joystick[i].sendState();
   }
+  */
   delay(24);
 }
