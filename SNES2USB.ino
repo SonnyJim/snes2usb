@@ -4,7 +4,8 @@
  *  TODO:  
  *  USB Joystick code (Teensy only supports 1 joystick without hacking)
  *  Support detection of the multitap - DONE
- *  Support detection of the mouse
+ *  Support detection of the mouse - DONE
+ *  Implement USB mouse
  *  Round robin mode? Every X seconds who's controlling player 1 changes
 
    7 pin SNES proprietary female connector view:
@@ -41,7 +42,11 @@ const int PIN_SELECT = 4;
 #define SNES_L       1024   //010000000000
 #define SNES_R       2048   //100000000000
 
+#define MOUSE_BUT1  (1 << 9)
+#define MOUSE_BUT2  (1 << 8)
 
+#define MOUSE_DIRY  (1 << 0)
+#define MOUSE_DIRX  (1 << 8)
 
 #define MAX_PADS 4
 /*
@@ -329,10 +334,77 @@ void mouse_read ()
     digitalWrite(PIN_CLOCK, HIGH);
     delayMicroseconds(8);
   }
+  /*
   Serial.print ("Mouse1 ");
   Serial.println (mouse_lo, BIN);
   Serial.print ("Mouse2 ");
   Serial.println (mouse_hi, BIN);
+  */
+}
+
+void mouse_decode ()
+{
+  int8_t x,y = 0;
+  
+
+  if ((mouse_lo & MOUSE_BUT1) == 0)
+  {
+    Serial.println ("Mouse button left pressed");  
+  }
+  else if ((mouse_lo & MOUSE_BUT1))
+  {
+      //Serial.println ("Mouse button left released");  
+  }
+    
+  if ((mouse_lo & MOUSE_BUT2) == 0)
+    Serial.println ("Mouse button right pressed");
+
+
+  x = (~mouse_hi >> 9) & 0x7F;
+  y = (~mouse_hi >> 1) & 0x7F;
+  
+  if ((mouse_hi & MOUSE_DIRX) == 0)
+  {
+    x = 0 - x;
+  }
+
+
+  if ((mouse_hi & MOUSE_DIRY) == 0)
+  {
+    y = 0 - y;
+  }
+
+    
+
+
+  Mouse.move (x, y, 0);
+/*
+  Serial.print ("X:" + String(x) + ",");
+  Serial.print ("Y:" + String(y));
+  Serial.println();
+  Serial.println (mouse_hi, BIN);
+  */
+  
+  /*
+   *   
+76543210  First byte
+++++++++- Always zero: 00000000
+
+76543210  Second byte
+||||++++- Signature: 0001
+||++----- Current sensitivity (2: low; 1: medium; 0: high)
+|+------- Left button (0: pressed)
++-------- Right button (0: pressed)
+
+76543210  Third byte
+|+++++++- Vertical displacement since last read
++-------- Direction (0: up; 1: down)
+
+76543210  Fourth byte
+|+++++++- Horizontal displacement since last read
++-------- Direction (0: left; 1: right)
+   */
+   
 }
 
 void gamepad_read ()
@@ -349,7 +421,6 @@ void gamepad_read ()
     delayMicroseconds(6);
   }
 }
-
 
 void set_buttons (int p)
 {
@@ -409,6 +480,7 @@ void loop()
         break;
       case MOUSE:
         mouse_read ();
+        mouse_decode ();
         break;
       case GAMEPAD:
         gamepad_read ();
