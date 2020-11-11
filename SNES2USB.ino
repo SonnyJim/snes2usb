@@ -21,7 +21,7 @@
 
 const int PIN_CLOCK = 0;
 const int PIN_LATCH = 1;
-const int PIN_DATA = 2;
+const int PIN_DATA = 2; //Put a pulldown resistor on this pin!!
 const int PIN_DATA2 = 3;
 const int PIN_SELECT = 4;
 
@@ -89,7 +89,7 @@ void setup()
   pinMode(PIN_SELECT, OUTPUT);
   digitalWrite (PIN_SELECT, HIGH);
 
-  pinMode(PIN_DATA, INPUT_PULLUP);
+  pinMode(PIN_DATA, INPUT);
   pinMode(PIN_DATA2, INPUT_PULLUP);
 
 }
@@ -152,7 +152,7 @@ bool detect_mouse ()
   mouse = 0;
   set_latch ();
 
-  for (int i = 0; i < 32; i++)
+  for (int i = 0; i < 16; i++)
   {
     digitalWrite(PIN_CLOCK, LOW);
     delayMicroseconds(6);
@@ -161,7 +161,8 @@ bool detect_mouse ()
     delayMicroseconds(6);
   }
   //Serial.println (mouse, BIN);
-  if ((mouse & (1 << 15)) == 0)//16th bit should be zero
+  //
+  if ((mouse & (0x70 << 8)) == 0x7000)//13-15 bits High, 16th bit should be low
   {
     if (device_type != MOUSE)
       Serial.println ("Mouse detected!");
@@ -184,8 +185,8 @@ bool detect_gamepad ()
     digitalWrite(PIN_CLOCK, HIGH);
     delayMicroseconds(6);
   }
-  Serial.println (data, BIN);
-  if ((data & (15 << 12)) != 0)//bits 14-16 should be set
+  
+  if ((data & (0x0F << 12)) == 0xF000)//bits 14-16 should be set
   {
     if (device_type != GAMEPAD)
       Serial.println ("Gamepad detected!");
@@ -198,9 +199,27 @@ bool detect_gamepad ()
 void detect_devices ()
 {
   bool result = false;
-  result |= detect_mouse ();
-  result |= detect_multitap ();
-  //result |= detect_gamepad (); //Need to put some tiedown resistors on, it always floats on the gamepad bits.
+  device_type_t device_type_old = device_type;
+  
+  //result |= detect_mouse ();
+  result = detect_multitap (); //TODO If multitap not found, delete any joysticks it would have created.
+  if (!result && device_type_old == MULTITAP)
+  {
+    for (int i=0;i<MAX_PADS;i++)
+    {
+      joystick_remove(i);
+    }
+    
+  }
+  
+  if (!result)
+    result = detect_gamepad ();
+  if (!result && device_type_old == GAMEPAD)
+    joystick_remove(0);
+    
+  //result = detect_gamepad (); //Need to put some tiedown resistors on, it always floats on the gamepad bits.
+  //if (!result)
+  //  result = detect_multitap ();
   if (!result)
     device_type = DISCONNECTED;  
 }
@@ -284,12 +303,12 @@ void mouse_read ()
     digitalWrite(PIN_CLOCK, HIGH);
     delayMicroseconds(6);
   }
+  Serial.println (mouse, BIN);
 }
 
 void gamepad_read ()
 {
   state[0] = 0;
-    mouse = 0;
   set_latch ();
 
   for (int i = 0; i < 32; i++)
