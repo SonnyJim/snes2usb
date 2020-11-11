@@ -53,7 +53,9 @@ const int PIN_SELECT = 4;
   };
 */
 
-uint32_t mouse;
+uint16_t mouse_lo; //bits0-15 of the mouse data
+uint16_t mouse_hi; //bits16-31
+
 uint16_t state[4]; //What data we read out of the SNES pad.
 bool  disconnected[4]; //Whether there's a controller connected to that port on the multitap
 uint16_t state_old[4];
@@ -149,20 +151,32 @@ bool detect_multitap ()
 
 bool detect_mouse ()
 {
-  mouse = 0;
+  mouse_lo = 0;
+  mouse_hi = 0;
   set_latch ();
 
   for (int i = 0; i < 16; i++)
   {
     digitalWrite(PIN_CLOCK, LOW);
     delayMicroseconds(6);
-    mouse |= digitalRead(PIN_DATA) << i;
+    mouse_lo |= digitalRead(PIN_DATA) << i;
     digitalWrite(PIN_CLOCK, HIGH);
     delayMicroseconds(6);
   }
-  //Serial.println (mouse, BIN);
-  //
-  if ((mouse & (0x70 << 8)) == 0x7000)//13-15 bits High, 16th bit should be low
+  delay(25);
+  for (int i = 0; i < 16; i++)
+  {
+    digitalWrite(PIN_CLOCK, LOW);
+    delayMicroseconds(5);
+    mouse_hi |= digitalRead(PIN_DATA) << i;
+    digitalWrite(PIN_CLOCK, HIGH);
+    delayMicroseconds(8);
+  }
+  //Serial.println (mouse_lo, HEX);
+  if ((mouse_lo & (1 << 12)) 
+    && (mouse_lo & (1 << 13))
+    && (mouse_lo & (1 << 14))
+    && !(mouse_lo & (1 << 15))) //13-15 bits High, 16th bit should be low TODO make this a proper bitmask FFS
   {
     if (device_type != MOUSE)
       Serial.println ("Mouse detected!");
@@ -200,26 +214,28 @@ void detect_devices ()
 {
   bool result = false;
   device_type_t device_type_old = device_type;
+
+  result = detect_mouse ();
+  if (!result && device_type_old == MOUSE)
+  {
+      Serial.println ("Mouse removed");
+  }
   
-  //result |= detect_mouse ();
-  result = detect_multitap (); //TODO If multitap not found, delete any joysticks it would have created.
+  if (!result)
+    result = detect_multitap ();
   if (!result && device_type_old == MULTITAP)
   {
     for (int i=0;i<MAX_PADS;i++)
     {
       joystick_remove(i);
-    }
-    
+    }  
   }
   
   if (!result)
     result = detect_gamepad ();
   if (!result && device_type_old == GAMEPAD)
-    joystick_remove(0);
-    
-  //result = detect_gamepad (); //Need to put some tiedown resistors on, it always floats on the gamepad bits.
-  //if (!result)
-  //  result = detect_multitap ();
+    joystick_remove(0); 
+  
   if (!result)
     device_type = DISCONNECTED;  
 }
@@ -292,18 +308,31 @@ void multitap_read ()
 
 void mouse_read ()
 {
-  mouse = 0;
+  mouse_lo = 0;
+  mouse_hi = 0;
   set_latch ();
-
-  for (int i = 0; i < 32; i++)
+  
+  for (int i = 0; i < 16; i++)
   {
     digitalWrite(PIN_CLOCK, LOW);
     delayMicroseconds(6);
-    mouse |= digitalRead(PIN_DATA) << i;
+    mouse_lo |= digitalRead(PIN_DATA) << i;
     digitalWrite(PIN_CLOCK, HIGH);
     delayMicroseconds(6);
   }
-  Serial.println (mouse, BIN);
+  delay(25);
+  for (int i = 0; i < 16; i++)
+  {
+    digitalWrite(PIN_CLOCK, LOW);
+    delayMicroseconds(5);
+    mouse_hi |= digitalRead(PIN_DATA) << i;
+    digitalWrite(PIN_CLOCK, HIGH);
+    delayMicroseconds(8);
+  }
+  Serial.print ("Mouse1 ");
+  Serial.println (mouse_lo, BIN);
+  Serial.print ("Mouse2 ");
+  Serial.println (mouse_hi, BIN);
 }
 
 void gamepad_read ()
