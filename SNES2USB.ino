@@ -20,13 +20,18 @@
    pin 6: Select (PP7)
 */
 
-const int PIN_CLOCK = 0;
-const int PIN_LATCH = 1;
-const int PIN_DATA = 2; //Put a pulldown resistor on this pin!!
-const int PIN_DATA2 = 3;
-const int PIN_SELECT = 4;
+const int PIN_CLOCK = 2;
+const int PIN_LATCH = 3;
+const int PIN_DATA = 4; //Put a pulldown resistor on this pin!!
+const int PIN_DATA2 = 5;
+const int PIN_SELECT = 6;
 
-//#include <Joystick.h>
+#include <Joystick.h>
+#include <FastLED.h>
+#define NUM_LEDS 3
+#define LED_PIN 9
+
+CRGB leds[NUM_LEDS];
 
 // Controller Buttons
 #define SNES_B       1      //000000000001
@@ -48,15 +53,17 @@ const int PIN_SELECT = 4;
 #define MOUSE_DIRY  (1 << 0)
 #define MOUSE_DIRX  (1 << 8)
 
-#define MAX_PADS 4
-/*
-  Joystick_ Joystick[MAX_PADS] = {
-  Joystick_(JOYSTICK_DEFAULT_REPORT_ID, JOYSTICK_TYPE_GAMEPAD, 8, 0, true, true, false, false, false, false, false, false, false, false, false),
-  Joystick_(JOYSTICK_DEFAULT_REPORT_ID + 1, JOYSTICK_TYPE_GAMEPAD, 8, 0, true, true, false, false, false, false, false, false, false, false, false),
-  Joystick_(JOYSTICK_DEFAULT_REPORT_ID + 2, JOYSTICK_TYPE_GAMEPAD, 8, 0, true, true, false, false, false, false, false, false, false, false, false),
-  Joystick_(JOYSTICK_DEFAULT_REPORT_ID + 3, JOYSTICK_TYPE_GAMEPAD, 8, 0, true, true, false, false, false, false, false, false, false, false, false),
+#define JOYSTICK_COUNT 4
+
+#define JOYSTICK_COUNT 4
+
+  Joystick_ Joystick[JOYSTICK_COUNT] = {
+  Joystick_(0x03, JOYSTICK_TYPE_GAMEPAD, 8, 0, true, true, false, false, false, false, false, false, false, false, false),
+  Joystick_(0x04, JOYSTICK_TYPE_GAMEPAD, 8, 0, true, true, false, false, false, false, false, false, false, false, false),
+  Joystick_(0x05, JOYSTICK_TYPE_GAMEPAD, 8, 0, true, true, false, false, false, false, false, false, false, false, false),
+  Joystick_(0x06, JOYSTICK_TYPE_GAMEPAD, 8, 0, true, true, false, false, false, false, false, false, false, false, false),
   };
-*/
+
 
 uint16_t mouse_lo; //bits0-15 of the mouse data
 uint16_t mouse_hi; //bits16-31
@@ -69,22 +76,35 @@ bool disconnected_old[4];
 enum device_type_t {DISCONNECTED, MULTITAP, GAMEPAD, MOUSE};
 device_type_t device_type = DISCONNECTED;
 
+uint8_t anim_timer;
+  
 void setup()
 {
   Serial.begin (115200);
+  delay(2500);
+  Serial.println ("****************************");
   Serial.println ("SNES2USB - Bomberman edition");
-  Joystick.useManualSend(true);
+//  Joystick.useManualSend(true);
+  FastLED.addLeds<WS2811, LED_PIN, GRB>(leds, NUM_LEDS);
+  leds[0] = CRGB::Red;
+  leds[1] = CRGB::Green;
+  leds[2] = CRGB::Blue;
   
-  for (int i = 0; i < MAX_PADS; i++)
+  FastLED.show();
+  anim_timer = 0;
+  
+  for (int i = 0; i < JOYSTICK_COUNT; i++)
   {
     disconnected[i] = true;
     state[i] = 0xFFFF; //Because too lazy to flip the bits
-    /*
     
-    Joystick[i].begin ();
+    
+    
     Joystick[i].setXAxisRange(-1, 1);
     Joystick[i].setYAxisRange(-1, 1);
-*/
+    Joystick[i].begin (false);
+    
+
   }
 
   pinMode(PIN_CLOCK, OUTPUT);
@@ -103,21 +123,20 @@ void setup()
 
 void joystick_add (int i)
 {
-  if (i > MAX_PADS || i < 0)
+  if (i > JOYSTICK_COUNT || i < 0)
     return;
   Serial.println ("Joystick " + String(i) + " Connected!");
-  /*
-    Joystick[i] = Joystick_(JOYSTICK_DEFAULT_REPORT_ID + i, JOYSTICK_TYPE_GAMEPAD, 8, 0, true, true, false, false, false, false, false, false, false, false, false),
-              Joystick[i].begin ();
+
+    Joystick[i].begin (false);
     Joystick[i].setXAxisRange(-1, 1);
     Joystick[i].setYAxisRange(-1, 1);
-  */
+  
 }
 
 void joystick_remove (int i)
 {
   Serial.println ("Joystick " + String(i) + " disconnected :(");
-  //  Joystick[i].end();
+  Joystick[i].end();
   state[i] = 0;
   disconnected[i] = true;
 }
@@ -168,7 +187,9 @@ bool detect_mouse ()
     digitalWrite(PIN_CLOCK, HIGH);
     delayMicroseconds(6);
   }
-  delay(25);
+  delay(2);
+  delayMicroseconds(500);
+  
   for (int i = 0; i < 16; i++)
   {
     digitalWrite(PIN_CLOCK, LOW);
@@ -230,7 +251,7 @@ void detect_devices ()
     result = detect_multitap ();
   if (!result && device_type_old == MULTITAP)
   {
-    for (int i=0;i<MAX_PADS;i++)
+    for (int i=0;i<JOYSTICK_COUNT;i++)
     {
       joystick_remove(i);
     }  
@@ -247,7 +268,7 @@ void detect_devices ()
 
 void multitap_check_devices ()
 {
-  for (int i=0;i<MAX_PADS;i++)
+  for (int i=0;i<JOYSTICK_COUNT;i++)
   {
     if (disconnected_old[i] != disconnected[i])
     {
@@ -271,7 +292,7 @@ void multitap_check_devices ()
 void multitap_state_backup ()
 {
   //Backup the current state so we can see if anything changes later;
-  for (int i=0;i<MAX_PADS;i++)
+  for (int i=0;i<JOYSTICK_COUNT;i++)
   {
     state_old[i] = state[i];
     disconnected_old[i] = disconnected[i];
@@ -325,7 +346,9 @@ void mouse_read ()
     digitalWrite(PIN_CLOCK, HIGH);
     delayMicroseconds(6);
   }
-  delay(25);
+  delay(2);
+  delayMicroseconds(500);
+  
   for (int i = 0; i < 16; i++)
   {
     digitalWrite(PIN_CLOCK, LOW);
@@ -344,8 +367,9 @@ void mouse_read ()
 
 void mouse_decode ()
 {
-  int8_t x,y = 0;
+  int16_t x,y;
   
+  y = 0;
 
   if ((mouse_lo & MOUSE_BUT1) == 0)
   {
@@ -360,7 +384,7 @@ void mouse_decode ()
     Serial.println ("Mouse button right pressed");
 
 
-  x = (~mouse_hi >> 9) & 0x7F;
+  x = (~mouse_hi & 0xFE00) >> 0x09;
   y = (~mouse_hi >> 1) & 0x7F;
   
   if ((mouse_hi & MOUSE_DIRX) == 0)
@@ -373,11 +397,11 @@ void mouse_decode ()
   {
     y = 0 - y;
   }
-
+  
     
 
 
-  Mouse.move (x, y, 0);
+//  Mouse.move (x, y, 0);
 /*
   Serial.print ("X:" + String(x) + ",");
   Serial.print ("Y:" + String(y));
@@ -424,7 +448,7 @@ void gamepad_read ()
 
 void set_buttons (int p)
 {
-
+/*
   Joystick.button (1, SNES_B & ~state[p]);
   Joystick.button (2, SNES_Y & ~state[p]);
   Joystick.button (3, SNES_SELECT & ~state[p]);
@@ -433,7 +457,7 @@ void set_buttons (int p)
   Joystick.button (6, SNES_X & ~state[p]);
   Joystick.button (7, SNES_L & ~state[p]);
   Joystick.button (8, SNES_R & ~state[p]);  
-  /*
+  */
     // buttons
     SNES_B & ~state[p] ? Joystick[p].pressButton(0) : Joystick[p].releaseButton(0);
     SNES_Y & ~state[p] ? Joystick[p].pressButton(1) : Joystick[p].releaseButton(1);
@@ -443,11 +467,12 @@ void set_buttons (int p)
     SNES_X & ~state[p] ? Joystick[p].pressButton(5) : Joystick[p].releaseButton(5);
     SNES_L & ~state[p] ? Joystick[p].pressButton(6) : Joystick[p].releaseButton(6);
     SNES_R & ~state[p] ? Joystick[p].pressButton(7) : Joystick[p].releaseButton(7);
-  */
+  
 }
 
 void set_axis (int p)
 {
+  /*
   Joystick.X (512);
   Joystick.Y (512);
   
@@ -455,21 +480,31 @@ void set_axis (int p)
   if (SNES_RIGHT & ~state[p]) Joystick.X(1034);
   if (SNES_DOWN & ~state[p]) Joystick.Y(1034);
   if (SNES_LEFT & ~state[p]) Joystick.X(0);
-  
-  /*
-    Joystick[p].setXAxis(0);
-    Joystick[p].setYAxis(0);
-    if (SNES_UP & ~state[p]) Joystick[p].setYAxis(1);
-    if (SNES_RIGHT & ~state[p]) Joystick[p].setXAxis(1);
-    if (SNES_DOWN & ~state[p]) Joystick[p].setYAxis(-1);
-    if (SNES_LEFT & ~state[p]) Joystick[p].setXAxis(-1);
   */
+  
+    Joystick[p].setXAxis(0);
+    
+    if (SNES_UP & ~state[p]) 
+      Joystick[p].setYAxis(-1);
+    else if (SNES_DOWN & ~state[p]) 
+      Joystick[p].setYAxis(1);
+    else
+      Joystick[p].setYAxis(0);
+        
+    if (SNES_RIGHT & ~state[p]) 
+      Joystick[p].setXAxis(1);
+    else if (SNES_LEFT & ~state[p]) 
+      Joystick[p].setXAxis(-1);
+    else
+      Joystick[p].setXAxis(0);
+  
 }
 
 
 
 void loop() 
 {
+  led_loop();
   detect_devices ();
   switch (device_type)
   {
@@ -487,20 +522,53 @@ void loop()
         break;
       case DISCONNECTED:
       default:
-        Serial.println ("Couldn't find any devices");
-        delay (2000);
+        //Serial.println ("Couldn't find any devices");
+        //delay (2000);
         return;
   }
+  /*
   set_buttons (0);
   set_axis (0);
   Joystick.send_now();
-  /*
-  for (int i = 0; i < MAX_PADS; i++)
+  */
+  for (int i = 0; i < JOYSTICK_COUNT; i++)
   {
     set_buttons(i);
     set_axis (i);
     Joystick[i].sendState();
   }
-  */
-  delay(24);
+  delay(14);
+}
+
+void led_loop ()
+{
+
+  anim_timer++;
+  if (anim_timer > 254)
+  {
+    anim_timer = 0;
+  }
+  
+  switch (device_type)
+  {
+    case  DISCONNECTED:
+    default:
+      for (int i=0;i<NUM_LEDS;i++)
+      {
+        if (anim_timer < 128)
+          leds[i] = CRGB(0,0,anim_timer);
+        else
+          leds[i] = CRGB(0,0, 254 - anim_timer);
+      }
+      break;
+    case MULTITAP:
+      for (int i=0;i<NUM_LEDS;i++)
+      {
+        leds[i] = CRGB::Green;
+      }
+      break;
+      
+  }
+
+  FastLED.show();
 }
